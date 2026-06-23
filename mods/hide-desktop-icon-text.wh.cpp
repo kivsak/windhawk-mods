@@ -2,7 +2,7 @@
 // @id            hide-desktop-icon-text
 // @name          Hide Desktop Icon Text and Shortcut Arrows
 // @description   Provides advanced options to independently hide text labels for apps, files, and folders, plus flawlessly removes shortcut arrows and the UAC shield.
-// @version       2.5.0
+// @version       2.6.0
 // @author        kivsak
 // @github        https://github.com/kivsak
 // @include       explorer.exe
@@ -20,6 +20,7 @@ Unlike older, buggy alternatives, this mod features a completely rewritten memor
 
 🌟 **Features**
 * **Triple-Threat Text Engine**: Granular control! Hide text labels independently for **Programs/Games**, **Regular Files**, and **Folders**.
+* **Selection Reveal**: Optionally show a hidden label while its desktop icon is selected.
 * **Smart Detection**: Dynamically scans your desktop structure to automatically differentiate between a shortcut to an app and a simple document.
 * **Flawless Overlays Removal**: Deletes those tiny blue shortcut arrows AND the yellow/blue UAC Admin Shields live, using a multi-layer draw intercept engine for full Win 11 compatibility.
 
@@ -39,6 +40,9 @@ Unlike older, buggy alternatives, this mod features a completely rewritten memor
 - hide_folders: false
   $name: Hide Folders
   $description: Removes text labels from folders.
+- show_text_when_selected: false
+  $name: Show Text When Selected
+  $description: Shows a hidden desktop icon label while the icon is selected.
 - hide_arrows: true
   $name: Hide Shortcut Arrows
   $description: Removes the small shortcut arrow overlay from icons (Zero black squares!).
@@ -60,6 +64,7 @@ Unlike older, buggy alternatives, this mod features a completely rewritten memor
 
 #include <string>
 #include <unordered_map>
+#include <unordered_set>
 #include <vector>
 
 // ---------------------------------------------------------------------------
@@ -70,6 +75,7 @@ struct {
     bool hide_programs;
     bool hide_files;
     bool hide_folders;
+    bool show_text_when_selected;
     bool hide_arrows;
     bool hide_shield;
 } g_settings;
@@ -88,6 +94,9 @@ enum class ItemType { Folder, Program, File };
 // Cache of item types on the desktop.
 std::unordered_map<std::wstring, ItemType> g_itemTypes;
 DWORD g_lastUpdateTick = 0;
+
+// Cache of selected desktop item labels for the current paint pass.
+std::unordered_set<std::wstring> g_selectedLabelNames;
 
 // ---------------------------------------------------------------------------
 // Window helpers
@@ -193,10 +202,36 @@ static void UpdateFolderCache() {
     g_itemTypes = std::move(fresh);
 }
 
+static void UpdateSelectedLabelCache(HWND hWnd) {
+    g_selectedLabelNames.clear();
+
+    if (!g_settings.show_text_when_selected || !hWnd) {
+        return;
+    }
+
+    WCHAR text[1024];
+    for (int item = -1; (item = ListView_GetNextItem(hWnd, item, LVNI_SELECTED)) != -1;) {
+        text[0] = L'\0';
+
+        LVITEMW lvItem = {};
+        lvItem.iSubItem = 0;
+        lvItem.pszText = text;
+        lvItem.cchTextMax = ARRAYSIZE(text);
+
+        if (SendMessageW(hWnd, LVM_GETITEMTEXTW, item, (LPARAM)&lvItem) > 0) {
+            g_selectedLabelNames.insert(text);
+        }
+    }
+}
+
 static inline bool ShouldHideLabel(LPCWSTR text, int cch) {
     if (!g_settings.hide_programs && !g_settings.hide_files && !g_settings.hide_folders) return false;
 
     std::wstring s(text, cch == -1 ? wcslen(text) : cch);
+    if (g_settings.show_text_when_selected && g_selectedLabelNames.count(s) != 0) {
+        return false;
+    }
+
     auto it = g_itemTypes.find(s);
     ItemType type = (it != g_itemTypes.end()) ? it->second : ItemType::File;
 
@@ -243,6 +278,7 @@ LRESULT CALLBACK DesktopListSubclass(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM
     if (uMsg == WM_PAINT) {
         if (g_settings.hide_programs || g_settings.hide_files || g_settings.hide_folders) {
             UpdateFolderCache();
+            UpdateSelectedLabelCache(hWnd);
         }
         g_isDrawingDesktop = true;
         LRESULT res = DefSubclassProc(hWnd, uMsg, wParam, lParam);
@@ -495,6 +531,7 @@ void LoadSettings() {
     g_settings.hide_programs = Wh_GetIntSetting(L"hide_programs") != 0;
     g_settings.hide_files = Wh_GetIntSetting(L"hide_files") != 0;
     g_settings.hide_folders = Wh_GetIntSetting(L"hide_folders") != 0;
+    g_settings.show_text_when_selected = Wh_GetIntSetting(L"show_text_when_selected") != 0;
     g_settings.hide_arrows = Wh_GetIntSetting(L"hide_arrows") != 0;
     g_settings.hide_shield = Wh_GetIntSetting(L"hide_shield") != 0;
 }
